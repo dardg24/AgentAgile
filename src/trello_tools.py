@@ -1,9 +1,16 @@
 import requests
-from config import TRELLO_API_KEY, TRELLO_TOKEN
+from config import (
+    TRELLO_API_KEY,
+    TRELLO_TOKEN,
+    BoardID,
+    ListId,
+    CardId,
+    CardName
+)
 from typing import Dict, List, Optional, TypedDict, Any
 
 # Trello API functions
-def get_trello_boards():
+def get_trello_boards() -> Dict[str, str]:
     """
     Gets all Trello boards accesible to the user.
 
@@ -12,11 +19,8 @@ def get_trello_boards():
 
     Returns:
         Dict[str, str]: A dictionary mapping board names to their IDs.
-        Example: {"Board Name": "12345abcdef"}
-        Returns None if the API call fails.
-
-    Raises:
-        ConnectionError: If unable to connect to the Trello API.
+        Example: {"Board Name": "12345abcdef", "Another Board" : "567890ghijk"}
+        Returns None if the API call fails (network error, HTTP error).
     """
     url = "https://api.trello.com/1/members/me/boards"
     headers = {
@@ -26,38 +30,57 @@ def get_trello_boards():
         "key": TRELLO_API_KEY, 
         "token": TRELLO_TOKEN
     }
-    response = requests.get(url, headers=headers, params=params)
-    
-    if response.status_code == 200:
-        # Create a dictionary of board names to board IDs
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
+
         boards_dict = {board['name']: board['id'] for board in response.json()}
         return boards_dict
-    else:
-        print(f"Error: {response.status_code}")
+    
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP error: {e.response.status_code} - {e}")
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f'Request failed (e.g., network issue): {e}')
         return None
 
-def get_trello_lists(board_id):
-    """
-    Gets all lists on a specific Trello board.
-    Returns a dictionary mapping list names to list IDs.
+def get_trello_lists(board_id: BoardID) -> Dict[str, str]:
+    """Gets all lists on a specific Trello board.
+    
+    This tool enables the agent to retrieve all lists within a specified board,
+    allowing users to see how their tasks are organized.
+    
+    Args:
+        board_id (BoardID): The ID of the Trello board to get lists from.
+    
+    Returns:
+        Dict[str, str]: A dictionary mapping list names to their IDs.
+            Example: {"To Do": "list123", "In Progress": "list456", "Done": "list789"}
+            Returns None if the API call fails.
+    
     """
     url = f"https://api.trello.com/1/boards/{board_id}/lists"
-    
     params = {
         "key": TRELLO_API_KEY, 
         "token": TRELLO_TOKEN
     }
     
-    response = requests.get(url, params=params)
-    
-    if response.status_code == 200:
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+
         lists_dict = {list_item['name']: list_item['id'] for list_item in response.json()}
         return lists_dict
-    else:
-        print(f"Error: {response.status_code}")
+    
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP error: {e.response.status_code} - {e}")
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f'Request failed (e.g., network issue): {e}')
         return None
 
-def get_cards_in_list(list_id):
+def get_cards_in_list(list_id: ListId) -> Dict[str, str]:
     """
     Gets all cards in a specific Trello list.
     Returns a dictionary mapping card names to card IDs.
