@@ -5,20 +5,27 @@ from typing import Dict, List, Optional, TypedDict, Any
 # Trello API functions
 def get_trello_boards():
     """
-    Gets all Trello boards accessible to the user.
-    Returns a dictionary mapping board names to board IDs.
+    Gets all Trello boards accesible to the user.
+
+    This tool allows the agent to retrieve and list all available Trello boards,
+    providing tthe user with an overview of their Trello workspace.
+
+    Returns:
+        Dict[str, str]: A dictionary mapping board names to their IDs.
+        Example: {"Board Name": "12345abcdef"}
+        Returns None if the API call fails.
+
+    Raises:
+        ConnectionError: If unable to connect to the Trello API.
     """
     url = "https://api.trello.com/1/members/me/boards"
-    
     headers = {
         "Accept": "application/json"
     }
-    
     params = {
         "key": TRELLO_API_KEY, 
         "token": TRELLO_TOKEN
     }
-    
     response = requests.get(url, headers=headers, params=params)
     
     if response.status_code == 200:
