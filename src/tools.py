@@ -2,12 +2,15 @@ import requests
 from config import (
     TRELLO_API_KEY,
     TRELLO_TOKEN,
-    BOARD_ID as DEFAULT_BOARD_ID,
+    BOARD_ID,
+    SLACK_CHANNEL_ID,
     BoardID,
     ListId,
     CardId,
     CardName,
-    DescriptionCard
+    DescriptionCard,
+    ChannelId,
+    ListName
 )
 from typing import Dict, Optional, Any, List
 from datetime import datetime, timedelta
@@ -253,6 +256,38 @@ def get_trello_card(card_id:CardId):
         print(f'Request failed (e.g., network issue): {e}')
         return None
 
+def send_to_slack(message: str, channel_id: ChannelId) -> bool:
+    """
+    Envía un mensaje a un canal específico de Slack.
+    
+    Args:
+        message (str): El mensaje a enviar
+        channel_id (str): ID del canal de Slack
+        
+    Returns:
+        bool: True si el mensaje se envió correctamente, False en caso contrario
+    """
+    try:
+        # Importamos aquí para evitar la dependencia circular
+        from config import SLACK_BOT_TOKEN
+        
+        url = "https://slack.com/api/chat.postMessage"
+        headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+        payload = {"channel": channel_id, "text": message}
+        
+        slack_response = requests.post(url, headers=headers, json=payload)
+        
+        if slack_response.status_code == 200 and slack_response.json().get("ok"):
+            print(f"Mensaje enviado exitosamente a Slack canal {channel_id}")
+            return True
+        else:
+            print(f"Error enviando mensaje a Slack: {slack_response.json()}")
+            return False
+    
+    except Exception as e:
+        print(f"Excepción enviando mensaje a Slack: {str(e)}")
+        return False
+
 # --- High-Level Tools for the Agent ---
 
 def list_boards() -> str:
@@ -280,49 +315,74 @@ def list_boards() -> str:
     
     return response
 
-def list_cards_in_list(list_name: str, board_id: Optional[str] = None) -> str:
+def list_cards_in_list(
+        list_name: ListName,
+        board_id: Optional[BoardID] = BOARD_ID,
+        channel_id: Optional[ChannelId] = SLACK_CHANNEL_ID) -> str:
     """
     Retrieves and formats all cards in a specific list by name.
-    
-    This high-level tool enables users to see all tasks within a specific status
-    category using natural language references to list names rather than IDs.
     
     Args:
         list_name (str): The name of the list to get cards from.
         board_id (str, optional): The ID of the board. If not provided, uses the default.
+        channel_id (str, optional): Slack channel ID for notifications.
     
     Returns:
         str: A formatted string listing all cards in the specified list.
              Returns an error message if the operation fails.
     """
-    board_id = board_id or DEFAULT_BOARD_ID
+    board_id = board_id or BOARD_ID
+    
+    # Enviar mensaje de progreso a Slack si se proporciona un channel_id
+    if channel_id:
+        send_to_slack(f"🔍 Buscando tarjetas en la lista '{list_name}'...", channel_id)
     
     # Get lists on the board
     lists = get_trello_lists(board_id)
     if not lists:
-        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+        error_msg = "⚠️ Unable to retrieve lists from the board. Please try again later."
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
     
     # Check if the requested list exists
     if list_name not in lists:
         similar_lists = [name for name in lists.keys() if list_name.lower() in name.lower()]
         suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
-        return f"❌ List '{list_name}' not found on the board.{suggestion}"
+        error_msg = f"❌ List '{list_name}' not found on the board.{suggestion}"
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
     
     # Get cards in the list
     cards = get_cards_in_list(lists[list_name])
     if cards is None:
-        return f"⚠️ Unable to retrieve cards from the '{list_name}' list. Please try again later."
+        error_msg = f"⚠️ Unable to retrieve cards from the '{list_name}' list. Please try again later."
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
     
     if len(cards) == 0:
-        return f"📋 The list '{list_name}' has no cards."
+        empty_msg = f"📋 The list '{list_name}' has no cards."
+        if channel_id:
+            send_to_slack(empty_msg, channel_id)
+        return empty_msg
     
     response = f"📋 **Cards in '{list_name}':**\n\n"
     for card_name in cards.keys():
         response += f"• {card_name}\n"
     
+    # Enviar resultado a Slack si se proporciona un channel_id
+    if channel_id:
+        send_to_slack(response, channel_id)
+    
     return response
 
-def create_new_card(card_name: str, list_name: str, description: str = "", board_id: Optional[str] = None) -> str:
+def create_new_card(
+        card_name: CardName,
+        list_name: ListName,
+        description: DescriptionCard = "",
+        board_id: Optional[BoardID] = BOARD_ID) -> str:
     """
     Creates a new card in the specified list using list name instead of ID.
     
@@ -338,7 +398,7 @@ def create_new_card(card_name: str, list_name: str, description: str = "", board
     Returns:
         str: A success or error message describing the result of the operation.
     """
-    board_id = board_id or DEFAULT_BOARD_ID
+    board_id = board_id or BOARD_ID
     
     # Get lists on the board
     lists = get_trello_lists(board_id)
@@ -359,7 +419,11 @@ def create_new_card(card_name: str, list_name: str, description: str = "", board
     else:
         return f"❌ Failed to create card '{card_name}'. Please try again later."
 
-def move_card_between_lists(card_name: str, source_list_name: str, target_list_name: str, board_id: Optional[str] = None) -> str:
+def move_card_between_lists(
+        card_name: str,
+        source_list_name: str,
+        target_list_name: str,
+        board_id: Optional[str] = None) -> str:
     """
     Moves a card from one list to another using list names instead of IDs.
     
@@ -375,7 +439,7 @@ def move_card_between_lists(card_name: str, source_list_name: str, target_list_n
     Returns:
         str: A success or error message describing the result of the operation.
     """
-    board_id = board_id or DEFAULT_BOARD_ID
+    board_id = board_id or BOARD_ID
     
     # Get lists on the board
     lists = get_trello_lists(board_id)
@@ -406,7 +470,12 @@ def move_card_between_lists(card_name: str, source_list_name: str, target_list_n
     else:
         return f"❌ Failed to move card '{card_name}'. Please try again later."
 
-def update_card_details(card_name: str, list_name: str, new_name: Optional[str] = None, new_description: Optional[str] = None, board_id: Optional[str] = None) -> str:
+def update_card_details(
+        card_name: str,
+        list_name: str,
+        new_name: Optional[str] = None,
+        new_description: Optional[str] = None,
+        board_id: Optional[str] = None) -> str:
     """
     Updates the details of an existing card using list and card names.
     
@@ -426,7 +495,7 @@ def update_card_details(card_name: str, list_name: str, new_name: Optional[str] 
     if not new_name and not new_description:
         return "⚠️ No updates specified. Please provide a new name or description."
     
-    board_id = board_id or DEFAULT_BOARD_ID
+    board_id = board_id or BOARD_ID
     
     # Get lists on the board
     lists = get_trello_lists(board_id)
@@ -460,8 +529,9 @@ def update_card_details(card_name: str, list_name: str, new_name: Optional[str] 
     else:
         return f"❌ Failed to update card '{card_name}'. Please try again later."
 
-# Add this to your trello_tools.py
-def generate_daily_stand_up(board_id: Optional[str] = None) -> str:
+def generate_daily_stand_up(
+        board_id: Optional[BoardID] = BOARD_ID,
+        channel_id: Optional[ChannelId] = SLACK_CHANNEL_ID) -> str:
     """
     Generates a detailed stand-up report of today's Trello activity.
     
@@ -470,16 +540,23 @@ def generate_daily_stand_up(board_id: Optional[str] = None) -> str:
     
     Args:
         board_id (str, optional): The ID of the board. If not provided, uses the default.
+        channel_id (str, optional): Slack channel ID for notifications.
     
     Returns:
         str: A formatted stand-up report showing today's activity.
     """
-    board_id = board_id or DEFAULT_BOARD_ID
+    if channel_id:
+        send_to_slack("🔍 Generando reporte de actividad diaria...", channel_id)
+    
+    board_id = board_id or BOARD_ID
     
     # Get lists on the board
     lists = get_trello_lists(board_id)
     if not lists:
-        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+        error_msg = "⚠️ Unable to retrieve lists from the board. Please try again later."
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
     
     # Collect all cards with details
     all_cards = []
@@ -512,7 +589,10 @@ def generate_daily_stand_up(board_id: Optional[str] = None) -> str:
             continue
     
     if not today_cards:
-        summary += "No cards were updated today.\n"
+        no_cards_msg = "No cards were updated today.\n"
+        summary += no_cards_msg
+        if channel_id:
+            send_to_slack(summary, channel_id)
         return summary
     
     summary += f"## Cards Updated Today ({len(today_cards)})\n\n"
@@ -531,7 +611,11 @@ def generate_daily_stand_up(board_id: Optional[str] = None) -> str:
         summary += f"- **Last Updated:** {card['dateLastActivity']}\n"
         summary += f"- **URL:** {url}\n\n"
     
+    if channel_id:
+        send_to_slack(summary, channel_id)
+    
     return summary
+
 
 # Full set of tools - both low-level and high-level
 tools = [
@@ -549,5 +633,7 @@ tools = [
     create_new_card,
     move_card_between_lists,
     update_card_details,
-    generate_daily_stand_up
+    generate_daily_stand_up,
+
+    send_to_slack
 ]

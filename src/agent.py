@@ -6,7 +6,7 @@ from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from config import GEMINI_API_KEY
-from trello_tools import tools
+from tools import tools
 
 # Define state schema
 class TrelloSlackState(TypedDict):
@@ -25,8 +25,15 @@ llm_with_tools = llm.bind_tools(tools)
 def assistant(state: TrelloSlackState):
     system_message = """You are a helpful Trello assistant integrated with Slack.
 You can manage Trello boards, lists, and cards using the available tools.
+You have access to a default Trello board that the user is working with.
 Always take time to understand the user's request before selecting a tool.
 Respond in a clear, professional manner.
+
+When the user asks for a "report", "activity report", "daily report", "stand-up report", or similar phrases,
+automatically use the generate_daily_stand_up tool with the default board.
+
+Remember that all high-level tools now can send messages directly to Slack, so users
+will receive real-time updates about the progress of their requests.
 """
     sys_msg = SystemMessage(content=system_message)
     
@@ -65,32 +72,39 @@ def process_slack_message(message: str, channel_id: str):
     Returns:
         The final result from the agent
     """
+    # Mensaje inicial que informa que la solicitud se está procesando
+    from tools import send_to_slack
+    send_to_slack(f"🔍 Procesando: '{message}'", channel_id)
+    
     # Initialize graph
     graph = build_trello_slack_graph()
     
     # Prepare initial state
     messages = [HumanMessage(content=message)]
     
-    # Invoke graph
+    # Invoke graph, incluyendo channel_id en el estado inicial
     result = graph.invoke({
         "messages": messages, 
-        "channel_id": channel_id
+        "channel_id": channel_id  # Esto hace disponible el channel_id en el estado
     })
     
     # For testing purposes, print the full conversation
     for i, msg in enumerate(result["messages"]):
         print(f"[{i}] {msg.type}: {msg.content}")
     
-    # Return the last message content for sending to Slack
-    return result["messages"][-1].content
+    # Send final response to Slack (if not already sent by tools)
+    final_message = result["messages"][-1].content
+    send_to_slack(f"🤖 {final_message}", channel_id)
+    
+    # Return the last message content
+    return final_message
 
-# Test function
 def test_agent():
     test_messages = [
         "Show me all cards in the 'To Do' list",
         "Move the card 'Fix login bug' from 'In Progress' to 'Done'",
         "Create a new card called 'Update documentation' in the 'To Do' list",
-        "Generate an activity report"
+        "Generate an activity report"  # Esta prueba debería funcionar ahora
     ]
     
     for message in test_messages:
@@ -98,11 +112,12 @@ def test_agent():
         print(f"USER REQUEST: {message}")
         print("="*50)
         
-        response = process_slack_message(message, "test-channel")
+        # Usamos el canal de prueba definido en la configuración
+        from config import SLACK_CHANNEL_ID
+        response = process_slack_message(message, SLACK_CHANNEL_ID)
         
         print("\nFINAL RESPONSE:")
         print(response)
         print("="*50)
-
 if __name__ == "__main__":
     test_agent()
