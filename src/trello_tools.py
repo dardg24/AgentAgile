@@ -2,15 +2,18 @@ import requests
 from config import (
     TRELLO_API_KEY,
     TRELLO_TOKEN,
+    BOARD_ID as DEFAULT_BOARD_ID,
     BoardID,
     ListId,
     CardId,
     CardName,
     DescriptionCard
 )
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
+from datetime import datetime, timedelta
 
-# Trello API functions
+# --- Low-Level API Functions ---
+
 def get_trello_boards() -> Dict[str, str]:
     """
     Gets all Trello boards accessible to the user.
@@ -226,8 +229,6 @@ def get_trello_card(card_id:CardId):
     Returns:
         Dict[str, Any]: The complete card data as returned by the Trello API.
             Returns None if the API call fails (network error, HTTP error).
-    
-
     """
     url = f"https://api.trello.com/1/cards/{card_id}"
     
@@ -252,11 +253,301 @@ def get_trello_card(card_id:CardId):
         print(f'Request failed (e.g., network issue): {e}')
         return None
 
+# --- High-Level Tools for the Agent ---
+
+def list_boards() -> str:
+    """
+    Retrieves and formats all available Trello boards for the user.
+    
+    This high-level tool provides a user-friendly list of all boards
+    accessible to the user's Trello account.
+    
+    Returns:
+        str: A formatted string listing all boards.
+             Returns an error message if the operation fails.
+    """
+    boards = get_trello_boards()
+    
+    if not boards:
+        return "⚠️ Unable to retrieve your Trello boards. Please try again later."
+    
+    if len(boards) == 0:
+        return "You don't have any Trello boards. Would you like to create one?"
+    
+    response = "📋 **Your Trello Boards:**\n\n"
+    for board_name in boards.keys():
+        response += f"• {board_name}\n"
+    
+    return response
+
+def list_cards_in_list(list_name: str, board_id: Optional[str] = None) -> str:
+    """
+    Retrieves and formats all cards in a specific list by name.
+    
+    This high-level tool enables users to see all tasks within a specific status
+    category using natural language references to list names rather than IDs.
+    
+    Args:
+        list_name (str): The name of the list to get cards from.
+        board_id (str, optional): The ID of the board. If not provided, uses the default.
+    
+    Returns:
+        str: A formatted string listing all cards in the specified list.
+             Returns an error message if the operation fails.
+    """
+    board_id = board_id or DEFAULT_BOARD_ID
+    
+    # Get lists on the board
+    lists = get_trello_lists(board_id)
+    if not lists:
+        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+    
+    # Check if the requested list exists
+    if list_name not in lists:
+        similar_lists = [name for name in lists.keys() if list_name.lower() in name.lower()]
+        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
+        return f"❌ List '{list_name}' not found on the board.{suggestion}"
+    
+    # Get cards in the list
+    cards = get_cards_in_list(lists[list_name])
+    if cards is None:
+        return f"⚠️ Unable to retrieve cards from the '{list_name}' list. Please try again later."
+    
+    if len(cards) == 0:
+        return f"📋 The list '{list_name}' has no cards."
+    
+    response = f"📋 **Cards in '{list_name}':**\n\n"
+    for card_name in cards.keys():
+        response += f"• {card_name}\n"
+    
+    return response
+
+def create_new_card(card_name: str, list_name: str, description: str = "", board_id: Optional[str] = None) -> str:
+    """
+    Creates a new card in the specified list using list name instead of ID.
+    
+    This high-level tool simplifies card creation by using natural language references
+    to lists and handling all the necessary API calls behind the scenes.
+    
+    Args:
+        card_name (str): The name/title for the new card.
+        list_name (str): The name of the list where the card will be created.
+        description (str, optional): The description for the new card.
+        board_id (str, optional): The ID of the board. If not provided, uses the default.
+    
+    Returns:
+        str: A success or error message describing the result of the operation.
+    """
+    board_id = board_id or DEFAULT_BOARD_ID
+    
+    # Get lists on the board
+    lists = get_trello_lists(board_id)
+    if not lists:
+        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+    
+    # Check if the requested list exists
+    if list_name not in lists:
+        similar_lists = [name for name in lists.keys() if list_name.lower() in name.lower()]
+        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
+        return f"❌ List '{list_name}' not found on the board.{suggestion}"
+    
+    # Create the card
+    result = create_trello_card(lists[list_name], card_name, description)
+    
+    if result:
+        return f"✅ Successfully created card '{card_name}' in list '{list_name}'."
+    else:
+        return f"❌ Failed to create card '{card_name}'. Please try again later."
+
+def move_card_between_lists(card_name: str, source_list_name: str, target_list_name: str, board_id: Optional[str] = None) -> str:
+    """
+    Moves a card from one list to another using list names instead of IDs.
+    
+    This high-level tool simplifies card movement by using natural language references
+    to cards and lists, handling all the necessary lookups and API calls.
+    
+    Args:
+        card_name (str): The name of the card to move.
+        source_list_name (str): The name of the list where the card is currently.
+        target_list_name (str): The name of the list where the card should be moved.
+        board_id (str, optional): The ID of the board. If not provided, uses the default.
+    
+    Returns:
+        str: A success or error message describing the result of the operation.
+    """
+    board_id = board_id or DEFAULT_BOARD_ID
+    
+    # Get lists on the board
+    lists = get_trello_lists(board_id)
+    if not lists:
+        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+    
+    # Check if both lists exist
+    if source_list_name not in lists:
+        return f"❌ Source list '{source_list_name}' not found on the board."
+    
+    if target_list_name not in lists:
+        return f"❌ Target list '{target_list_name}' not found on the board."
+    
+    # Get cards in the source list
+    cards = get_cards_in_list(lists[source_list_name])
+    if cards is None:
+        return f"⚠️ Unable to retrieve cards from '{source_list_name}'. Please try again later."
+    
+    # Check if the card exists in the source list
+    if card_name not in cards:
+        return f"❌ Card '{card_name}' not found in list '{source_list_name}'."
+    
+    # Move the card
+    result = update_trello_card(cards[card_name], lists[target_list_name])
+    
+    if result:
+        return f"✅ Successfully moved card '{card_name}' from '{source_list_name}' to '{target_list_name}'."
+    else:
+        return f"❌ Failed to move card '{card_name}'. Please try again later."
+
+def update_card_details(card_name: str, list_name: str, new_name: Optional[str] = None, new_description: Optional[str] = None, board_id: Optional[str] = None) -> str:
+    """
+    Updates the details of an existing card using list and card names.
+    
+    This high-level tool allows for updating card details using natural language
+    references rather than technical IDs.
+    
+    Args:
+        card_name (str): The current name of the card to update.
+        list_name (str): The name of the list containing the card.
+        new_name (str, optional): The new name for the card.
+        new_description (str, optional): The new description for the card.
+        board_id (str, optional): The ID of the board. If not provided, uses the default.
+    
+    Returns:
+        str: A success or error message describing the result of the operation.
+    """
+    if not new_name and not new_description:
+        return "⚠️ No updates specified. Please provide a new name or description."
+    
+    board_id = board_id or DEFAULT_BOARD_ID
+    
+    # Get lists on the board
+    lists = get_trello_lists(board_id)
+    if not lists:
+        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+    
+    # Check if the list exists
+    if list_name not in lists:
+        return f"❌ List '{list_name}' not found on the board."
+    
+    # Get cards in the list
+    cards = get_cards_in_list(lists[list_name])
+    if cards is None:
+        return f"⚠️ Unable to retrieve cards from '{list_name}'. Please try again later."
+    
+    # Check if the card exists
+    if card_name not in cards:
+        return f"❌ Card '{card_name}' not found in list '{list_name}'."
+    
+    # Update the card
+    result = update_trello_card(cards[card_name], name=new_name, desc=new_description)
+    
+    if result:
+        updates = []
+        if new_name:
+            updates.append("name")
+        if new_description:
+            updates.append("description")
+        
+        return f"✅ Successfully updated {' and '.join(updates)} of card '{card_name}'."
+    else:
+        return f"❌ Failed to update card '{card_name}'. Please try again later."
+
+# Add this to your trello_tools.py
+def generate_daily_stand_up(board_id: Optional[str] = None) -> str:
+    """
+    Generates a detailed stand-up report of today's Trello activity.
+    
+    This targeted report focuses specifically on cards updated today,
+    making it perfect for daily stand-up meetings and progress updates.
+    
+    Args:
+        board_id (str, optional): The ID of the board. If not provided, uses the default.
+    
+    Returns:
+        str: A formatted stand-up report showing today's activity.
+    """
+    board_id = board_id or DEFAULT_BOARD_ID
+    
+    # Get lists on the board
+    lists = get_trello_lists(board_id)
+    if not lists:
+        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+    
+    # Collect all cards with details
+    all_cards = []
+    for list_name, list_id in lists.items():
+        cards_dict = get_cards_in_list(list_id)
+        if cards_dict:
+            for card_name, card_id in cards_dict.items():
+                card_details = get_trello_card(card_id)
+                if card_details:
+                    card_details["list_name"] = list_name
+                    all_cards.append(card_details)
+    
+    # Get current date
+    today = datetime.now().date()
+    
+    summary = "# Daily Stand-Up Summary\n\n"
+    summary += f"Date: {today.strftime('%d/%m/%Y')}\n\n"
+    
+    # Filter cards updated today
+    today_cards = []
+    for card in all_cards:
+        # Safely parse the date with proper timezone handling
+        try:
+            last_activity = datetime.fromisoformat(card['dateLastActivity'].replace('Z', '+00:00'))
+            # Compare only the date portions
+            if last_activity.date() == today:
+                today_cards.append(card)
+        except (ValueError, TypeError):
+            # Skip cards with unparseable dates
+            continue
+    
+    if not today_cards:
+        summary += "No cards were updated today.\n"
+        return summary
+    
+    summary += f"## Cards Updated Today ({len(today_cards)})\n\n"
+    
+    for card in today_cards:
+        # Extract relevant information
+        name = card['name']
+        description = card['desc'] if card['desc'] else "No description"
+        status = "Open" if not card['closed'] else "Closed"
+        url = card['url']
+        
+        # Add to summary
+        summary += f"### {name}\n"
+        summary += f"- **Status:** {status}\n"
+        summary += f"- **Description:** {description}\n"
+        summary += f"- **Last Updated:** {card['dateLastActivity']}\n"
+        summary += f"- **URL:** {url}\n\n"
+    
+    return summary
+
+# Full set of tools - both low-level and high-level
 tools = [
+    # Low-level API tools
     get_trello_boards,
     get_trello_lists,
     get_cards_in_list,
     create_trello_card,
     update_trello_card,
-    get_trello_card
- ]
+    get_trello_card,
+    
+    # High-level tools optimized for agent use
+    list_boards,
+    list_cards_in_list,
+    create_new_card,
+    move_card_between_lists,
+    update_card_details,
+    generate_daily_stand_up
+]
