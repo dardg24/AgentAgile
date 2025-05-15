@@ -81,9 +81,10 @@ def get_trello_lists(board_id: BoardID) -> Dict[str, str]:
         return None
 
 def get_cards_in_list(list_id: ListId) -> Dict[str, str]:
-    """
-    Gets all cards in a specific Trello list.
-    Returns a dictionary mapping card names to card IDs.
+    """Gets all cards in a specific Trello list.
+
+       This tool allows the agent to retrieve all cards within a specified list,
+       enabling users to see the task within a particular status category
     """
     url = f"https://api.trello.com/1/lists/{list_id}/cards"
     
