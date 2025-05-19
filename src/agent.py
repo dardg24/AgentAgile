@@ -101,11 +101,12 @@ def process_slack_message(message: str, channel_id: str):
 
 def test_agent():
     test_messages = [
-        "Show me all cards in the 'To Do' list",
-        "Move the card 'Fix login bug' from 'In Progress' to 'Done'",
-        "Create a new card called 'Update documentation' in the 'To Do' list",
-        "Generate an activity report",
-        "Genere a python function to replicate Fibonacci"  # Esta prueba debería funcionar ahora
+        "Create a new card in Testing called testing new Jetson ",
+        # "Move the card 'Fix login bug' from 'In Progress' to 'Done'",
+        # "Create a new card called 'Update documentation' in the 'To Do' list",
+        # "Generate an activity report",
+        # "Genere a python function to replicate Fibonacci",
+        # "Say Hi to Jesus and tell him to move to the new trello board"  # Esta prueba debería funcionar ahora
     ]
     
     for message in test_messages:
