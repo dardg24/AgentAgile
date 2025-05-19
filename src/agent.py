@@ -104,7 +104,8 @@ def test_agent():
         "Show me all cards in the 'To Do' list",
         "Move the card 'Fix login bug' from 'In Progress' to 'Done'",
         "Create a new card called 'Update documentation' in the 'To Do' list",
-        "Generate an activity report"  # Esta prueba debería funcionar ahora
+        "Generate an activity report",
+        "Genere a python function to replicate Fibonacci"  # Esta prueba debería funcionar ahora
     ]
     
     for message in test_messages:
