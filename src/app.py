@@ -21,6 +21,10 @@ app = Flask(__name__)
 @app.route('/slack/events', methods=['POST'])
 def slack_events():
     
+    if not is_valid_slack_request():
+        return jsonify({'error': 'invalidad_request'}), 403
+    
+    
     data = request.json
     if "challenge" in data:
         return jsonify({"challenge": data["challenge"]})
