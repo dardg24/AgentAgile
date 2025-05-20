@@ -11,6 +11,7 @@ SLACK_CHANNEL_ID = os.getenv("SLACK_CHANNEL_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 APP_TOKEN = os.getenv("APP_TOKEN")
 BOARD_ID = os.getenv('BOARD_ID')
+SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET')
 
 # NewTypeHints for functions
 from typing import NewType

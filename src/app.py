@@ -1,14 +1,12 @@
-import hmac
-import hashlib
-import json
-import time
+
 import threading
 import os
 
 from agent import process_slack_message
+from dotenv import load_dotenv
 from funcs import is_valid_slack_request
 from flask import Flask, request, jsonify
-from dotenv import load_dotenv
+
 
 # Cargar variables de entorno
 load_dotenv()
@@ -54,7 +52,7 @@ def slack_events():
                 
                 # Procesar solo mensajes que contengan una palabra clave, por ejemplo "trello:"
                 if text.lower().startswith("trello:"):
-                    text = text[7:].strip()  # Remover "trello:"
+                    text = text[7:].strip()  
                     threading.Thread(
                         target=process_slack_message,
                         args=(text, channel_id)
