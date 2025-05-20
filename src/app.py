@@ -3,15 +3,9 @@ import threading
 import os
 
 from agent import process_slack_message
-from dotenv import load_dotenv
+# from config import SLACK_SIGNING_SECRET, SLACK_BOT_TOKEN
 from funcs import is_valid_slack_request
 from flask import Flask, request, jsonify
-
-
-# Cargar variables de entorno
-load_dotenv()
-SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET")
-SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 
 
 app = Flask(__name__)
@@ -21,7 +15,6 @@ def slack_events():
     
     if not is_valid_slack_request():
         return jsonify({'error': 'invalidad_request'}), 403
-    
     
     data = request.json
     if "challenge" in data:

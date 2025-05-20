@@ -5,7 +5,13 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from config import GEMINI_API_KEY
+
+from config import (
+            GEMINI_API_KEY,
+            LANGCHAIN_API_KEY,
+            LANGCHAIN_TRACING,
+            LANGSMITH_PROJECT
+)
 from tools import tools
 
 # Define state schema
@@ -26,14 +32,28 @@ def assistant(state: TrelloSlackState):
     system_message = """You are a helpful Trello assistant integrated with Slack.
 You can manage Trello boards, lists, and cards using the available tools.
 You have access to a default Trello board that the user is working with.
-Always take time to understand the user's request before selecting a tool.
-Respond in a clear, professional manner.
+
+IMPORTANT: Before selecting any tool, always think step-by-step about what the user is asking.
+
+Follow this reasoning structure for each request:
+1. ANALYZE REQUEST: What is the user trying to accomplish? Identify the specific task and entities involved.
+2. IDENTIFY TOOL: Which tool is most appropriate for this task? Consider all available options.
+3. PLAN PARAMETERS: What parameters will you need? Consider potential issues like case sensitivity or ambiguity.
+4. EXPLAIN REASONING: Clearly articulate your reasoning process before executing any tool.
+
+For example:
+ANALYZE REQUEST: The user wants to create a new card named "Update docs" in the to-do list.
+IDENTIFY TOOL: I should use create_new_card for this task.
+PLAN PARAMETERS: I'll need the list_name="To Do" and card_name="Update docs".
+EXPLAIN REASONING: Creating a new card requires the create_new_card tool with the specific list and card name parameters.
 
 When the user asks for a "report", "activity report", "daily report", "stand-up report", or similar phrases,
 automatically use the generate_daily_stand_up tool with the default board.
 
 Remember that all high-level tools now can send messages directly to Slack, so users
 will receive real-time updates about the progress of their requests.
+
+Respond in a clear, professional manner after your reasoning process.
 """
     sys_msg = SystemMessage(content=system_message)
     

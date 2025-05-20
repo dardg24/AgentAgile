@@ -13,7 +13,7 @@ from config import (
     ListName
 )
 from typing import Dict, Optional, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # --- Low-Level API Functions ---
 
@@ -335,7 +335,7 @@ def list_cards_in_list(
     
     # Enviar mensaje de progreso a Slack si se proporciona un channel_id
     if channel_id:
-        send_to_slack(f"🔍 Buscando tarjetas en la lista '{list_name}'...", channel_id)
+        send_to_slack(f"🔍 Looking cards in list '{list_name}'...", channel_id)
     
     # Get lists on the board
     lists = get_trello_lists(board_id)
@@ -345,14 +345,19 @@ def list_cards_in_list(
             send_to_slack(error_msg, channel_id)
         return error_msg
     
-    # Check if the requested list exists
-    if list_name not in lists:
-        similar_lists = [name for name in lists.keys() if list_name.lower() in name.lower()]
-        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
-        error_msg = f"❌ List '{list_name}' not found on the board.{suggestion}"
-        if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
+    lists_case_insensitive = {name.lower(): (name, id) for name, id in lists.items()}
+
+    if list_name.lower() in lists_case_insensitive:
+        actual_list_name, list_id = lists_case_insensitive[list_name.lower()]
+
+    # # Check if the requested list exists
+    # if list_name not in lists:
+    #     similar_lists = [name for name in lists.keys() if list_name.lower() in name.lower()]
+    #     suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
+    #     error_msg = f"❌ List '{list_name}' not found on the board.{suggestion}"
+    #     if channel_id:
+    #         send_to_slack(error_msg, channel_id)
+    #     return error_msg
     
     # Get cards in the list
     cards = get_cards_in_list(lists[list_name])
@@ -382,7 +387,8 @@ def create_new_card(
         card_name: CardName,
         list_name: ListName,
         description: DescriptionCard = "",
-        board_id: Optional[BoardID] = BOARD_ID) -> str:
+        board_id: Optional[BoardID] = BOARD_ID,
+        channel_id: Optional[ChannelId] = SLACK_CHANNEL_ID) -> str:
     """
     Creates a new card in the specified list using list name instead of ID.
     
@@ -400,30 +406,54 @@ def create_new_card(
     """
     board_id = board_id or BOARD_ID
     
+    if channel_id:
+        send_to_slack(f"🔍 Creando tarjeta '{card_name}' en la lista '{list_name}'...", channel_id)
+    
     # Get lists on the board
     lists = get_trello_lists(board_id)
     if not lists:
-        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+        error_msg = "⚠️ Unable to retrieve lists from the board. Please try again later."
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
     
-    # Check if the requested list exists
-    if list_name not in lists:
-        similar_lists = [name for name in lists.keys() if list_name.lower() in name.lower()]
-        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
-        return f"❌ List '{list_name}' not found on the board.{suggestion}"
+    # Crear un mapa insensible a mayúsculas/minúsculas
+    lists_case_insensitive = {name.lower(): (name, id) for name, id in lists.items()}
     
-    # Create the card
-    result = create_trello_card(lists[list_name], card_name, description)
-    
-    if result:
-        return f"✅ Successfully created card '{card_name}' in list '{list_name}'."
+    # Buscar el nombre de lista (insensible a mayúsculas/minúsculas)
+    if list_name.lower() in lists_case_insensitive:
+        actual_list_name, list_id = lists_case_insensitive[list_name.lower()]
+        
+        # Create the card
+        result = create_trello_card(list_id, card_name, description)
+        
+        if result:
+            success_msg = f"✅ Successfully created card '{card_name}' in list '{actual_list_name}'."
+            if channel_id:
+                send_to_slack(success_msg, channel_id)
+            return success_msg
+        else:
+            error_msg = f"❌ Failed to create card '{card_name}'. Please try again later."
+            if channel_id:
+                send_to_slack(error_msg, channel_id)
+            return error_msg
     else:
-        return f"❌ Failed to create card '{card_name}'. Please try again later."
+        # Si no se encuentra, sugerir listas similares
+        similar_lists = [name for name in lists.keys() 
+                         if list_name.lower() in name.lower() 
+                         or name.lower() in list_name.lower()]
+        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
+        error_msg = f"❌ List '{list_name}' not found on the board.{suggestion}"
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
 
 def move_card_between_lists(
         card_name: str,
         source_list_name: str,
         target_list_name: str,
-        board_id: Optional[str] = None) -> str:
+        board_id: Optional[str] = BOARD_ID,
+        channel_id: Optional[ChannelId] = SLACK_CHANNEL_ID) -> str:
     """
     Moves a card from one list to another using list names instead of IDs.
     
@@ -441,34 +471,82 @@ def move_card_between_lists(
     """
     board_id = board_id or BOARD_ID
     
+    if channel_id:
+        send_to_slack(f"🔍 Moviendo tarjeta '{card_name}' de '{source_list_name}' a '{target_list_name}'...", channel_id)
+    
     # Get lists on the board
     lists = get_trello_lists(board_id)
     if not lists:
-        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+        error_msg = "⚠️ Unable to retrieve lists from the board. Please try again later."
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
     
-    # Check if both lists exist
-    if source_list_name not in lists:
-        return f"❌ Source list '{source_list_name}' not found on the board."
+    # Crear un mapa insensible a mayúsculas/minúsculas
+    lists_case_insensitive = {name.lower(): (name, id) for name, id in lists.items()}
     
-    if target_list_name not in lists:
-        return f"❌ Target list '{target_list_name}' not found on the board."
+    # Verificar la lista de origen (insensible a mayúsculas/minúsculas)
+    if source_list_name.lower() not in lists_case_insensitive:
+        similar_lists = [name for name in lists.keys() 
+                         if source_list_name.lower() in name.lower()]
+        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
+        error_msg = f"❌ Source list '{source_list_name}' not found on the board.{suggestion}"
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
+    
+    # Verificar la lista de destino (insensible a mayúsculas/minúsculas)
+    if target_list_name.lower() not in lists_case_insensitive:
+        similar_lists = [name for name in lists.keys() 
+                         if target_list_name.lower() in name.lower()]
+        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
+        error_msg = f"❌ Target list '{target_list_name}' not found on the board.{suggestion}"
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
+    
+    # Obtener los nombres e IDs originales
+    source_list_actual_name, source_list_id = lists_case_insensitive[source_list_name.lower()]
+    target_list_actual_name, target_list_id = lists_case_insensitive[target_list_name.lower()]
     
     # Get cards in the source list
-    cards = get_cards_in_list(lists[source_list_name])
+    cards = get_cards_in_list(source_list_id)
     if cards is None:
-        return f"⚠️ Unable to retrieve cards from '{source_list_name}'. Please try again later."
+        error_msg = f"⚠️ Unable to retrieve cards from '{source_list_actual_name}'. Please try again later."
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
     
-    # Check if the card exists in the source list
-    if card_name not in cards:
-        return f"❌ Card '{card_name}' not found in list '{source_list_name}'."
+    # También podemos hacer una búsqueda insensible a mayúsculas/minúsculas para las tarjetas
+    cards_case_insensitive = {name.lower(): (name, id) for name, id in cards.items()}
     
-    # Move the card
-    result = update_trello_card(cards[card_name], lists[target_list_name])
-    
-    if result:
-        return f"✅ Successfully moved card '{card_name}' from '{source_list_name}' to '{target_list_name}'."
+    # Verificar si la tarjeta existe (insensible a mayúsculas/minúsculas)
+    if card_name.lower() in cards_case_insensitive:
+        card_actual_name, card_id = cards_case_insensitive[card_name.lower()]
+        
+        # Move the card
+        result = update_trello_card(card_id, target_list_id)
+        
+        if result:
+            success_msg = f"✅ Successfully moved card '{card_actual_name}' from '{source_list_actual_name}' to '{target_list_actual_name}'."
+            if channel_id:
+                send_to_slack(success_msg, channel_id)
+            return success_msg
+        else:
+            error_msg = f"❌ Failed to move card '{card_actual_name}'. Please try again later."
+            if channel_id:
+                send_to_slack(error_msg, channel_id)
+            return error_msg
     else:
-        return f"❌ Failed to move card '{card_name}'. Please try again later."
+        # Si no se encuentra la tarjeta, sugerir tarjetas similares
+        similar_cards = [name for name in cards.keys() 
+                         if card_name.lower() in name.lower() 
+                         or name.lower() in card_name.lower()]
+        suggestion = f"\n\nDid you mean one of these cards? {', '.join(similar_cards)}" if similar_cards else ""
+        error_msg = f"❌ Card '{card_name}' not found in list '{source_list_actual_name}'.{suggestion}"
+        if channel_id:
+            send_to_slack(error_msg, channel_id)
+        return error_msg
 
 def update_card_details(
         card_name: str,

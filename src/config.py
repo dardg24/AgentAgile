@@ -13,6 +13,11 @@ APP_TOKEN = os.getenv("APP_TOKEN")
 BOARD_ID = os.getenv('BOARD_ID')
 SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET')
 
+# Langchain constants
+LANGCHAIN_API_KEY =  os.getenv('LANGCHAIN_API_KEY')
+LANGCHAIN_TRACING = os.getenv('LANGCHAIN_TRACING')
+LANGSMITH_PROJECT= os.getenv('LANGSMITH_PROJECT')
+
 # NewTypeHints for functions
 from typing import NewType
 
