@@ -1,4 +1,6 @@
+import json
 import requests
+
 from config import (
     TRELLO_API_KEY,
     TRELLO_TOKEN,
@@ -256,24 +258,43 @@ def get_trello_card(card_id:CardId):
         print(f'Request failed (e.g., network issue): {e}')
         return None
 
-def send_to_slack(message: str, channel_id: ChannelId) -> bool:
+def send_to_slack(
+        message: str, 
+        channel_id: ChannelId, 
+        blocks: Optional[List[Dict]] = None,
+        thread_ts: Optional[str] = None
+    ) -> bool:
     """
     Envía un mensaje a un canal específico de Slack.
     
     Args:
-        message (str): El mensaje a enviar
+        message (str): El mensaje a enviar (fallback text)
         channel_id (str): ID del canal de Slack
+        blocks (List[Dict], opcional): Bloques formateados para el mensaje
+        thread_ts (str, opcional): ID de un hilo para responder en esa conversación
         
     Returns:
         bool: True si el mensaje se envió correctamente, False en caso contrario
     """
     try:
-        # Importamos aquí para evitar la dependencia circular
         from config import SLACK_BOT_TOKEN
         
         url = "https://slack.com/api/chat.postMessage"
-        headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
-        payload = {"channel": channel_id, "text": message}
+        headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+                  "Content-Type": "application/json"}
+        
+        payload = {
+            "channel": channel_id,
+            "text": message  # Texto de respaldo si los bloques no se pueden renderizar
+        }
+        
+        # Añadir bloques si están presentes
+        if blocks:
+            payload["blocks"] = blocks
+            
+        # Añadir thread_ts si está presente para responder en un hilo
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
         
         slack_response = requests.post(url, headers=headers, json=payload)
         
@@ -287,6 +308,189 @@ def send_to_slack(message: str, channel_id: ChannelId) -> bool:
     except Exception as e:
         print(f"Excepción enviando mensaje a Slack: {str(e)}")
         return False
+
+def format_cards_list(list_name: str, cards: Dict[str, str]) -> List[Dict]:
+    """Formatea una lista de tarjetas como bloques de Slack."""
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"📋 Cards in '{list_name}'",
+                "emoji": True
+            }
+        },
+        {
+            "type": "divider"
+        }
+    ]
+    
+    # Añadir cada tarjeta como una sección
+    if cards:
+        for card_name, card_id in cards.items():
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"• {card_name}"
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Move Card",
+                        "emoji": True
+                    },
+                    "value": json.dumps({
+                        "action": "move_card",
+                        "source_list": list_name,
+                        "card_name": card_name
+                    })
+                }
+            })
+    else:
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "_No cards in this list_"
+            }
+        })
+    
+    # Añadir botón para crear nueva tarjeta
+    blocks.append({
+        "type": "actions",
+        "elements": [
+            {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Create New Card",
+                    "emoji": True
+                },
+                "value": json.dumps({
+                    "action": "create_card",
+                    "list_name": list_name
+                })
+            }
+        ]
+    })
+    
+    return blocks
+
+def format_success_message(message: str) -> List[Dict]:
+    """Formatea un mensaje de éxito como bloques de Slack."""
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"✅ *Success*"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": message
+            }
+        }
+    ]
+
+def format_error_message(error: str, suggestions: Optional[List[str]] = None) -> List[Dict]:
+    """Formatea un mensaje de error como bloques de Slack."""
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"❌ *Error*"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": error
+            }
+        }
+    ]
+    
+    # Añadir sugerencias si están presentes
+    if suggestions:
+        suggestion_text = "Did you mean one of these? " + ", ".join([f"`{s}`" for s in suggestions])
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": suggestion_text
+            }
+        })
+    
+    return blocks
+
+def format_daily_report(report_content: str) -> List[Dict]:
+    """Formatea un informe diario como bloques de Slack."""
+    # Extraer las secciones del informe
+    title = "Daily Stand-Up Summary"
+    
+    # Dividir el informe en secciones para formato más amigable
+    sections = report_content.split("##")
+    
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": title,
+                "emoji": True
+            }
+        }
+    ]
+    
+    # Añadir la fecha (asumimos que está en la primera sección)
+    if len(sections) > 0:
+        date_section = sections[0]
+        date_lines = [line for line in date_section.split("\n") if "Date:" in line]
+        if date_lines:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": date_lines[0].strip()
+                }
+            })
+            
+    blocks.append({"type": "divider"})
+    
+    # Añadir cada sección principal
+    for i, section in enumerate(sections[1:], 1):
+        lines = section.strip().split("\n")
+        if lines:
+            # Título de la sección
+            section_title = lines[0].strip()
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*{section_title}*"
+                }
+            })
+            
+            # Contenido de la sección
+            content = "\n".join(lines[1:]).strip()
+            if content:
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": content
+                    }
+                })
+                
+            blocks.append({"type": "divider"})
+    
+    return blocks
 
 # --- High-Level Tools for the Agent ---
 
@@ -333,55 +537,61 @@ def list_cards_in_list(
     """
     board_id = board_id or BOARD_ID
     
-    # Enviar mensaje de progreso a Slack si se proporciona un channel_id
     if channel_id:
-        send_to_slack(f"🔍 Looking cards in list '{list_name}'...", channel_id)
+        send_to_slack(f"🔍 Buscando tarjetas en la lista '{list_name}'...", channel_id)
     
     # Get lists on the board
     lists = get_trello_lists(board_id)
     if not lists:
         error_msg = "⚠️ Unable to retrieve lists from the board. Please try again later."
         if channel_id:
-            send_to_slack(error_msg, channel_id)
+            send_to_slack(error_msg, channel_id, format_error_message(error_msg))
         return error_msg
     
+    # Crear un mapa insensible a mayúsculas/minúsculas
     lists_case_insensitive = {name.lower(): (name, id) for name, id in lists.items()}
-
+    
+    # Buscar el nombre de lista (insensible a mayúsculas/minúsculas)
     if list_name.lower() in lists_case_insensitive:
         actual_list_name, list_id = lists_case_insensitive[list_name.lower()]
-
-    # # Check if the requested list exists
-    # if list_name not in lists:
-    #     similar_lists = [name for name in lists.keys() if list_name.lower() in name.lower()]
-    #     suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
-    #     error_msg = f"❌ List '{list_name}' not found on the board.{suggestion}"
-    #     if channel_id:
-    #         send_to_slack(error_msg, channel_id)
-    #     return error_msg
-    
-    # Get cards in the list
-    cards = get_cards_in_list(lists[list_name])
-    if cards is None:
-        error_msg = f"⚠️ Unable to retrieve cards from the '{list_name}' list. Please try again later."
+        
+        # Get cards in the list
+        cards = get_cards_in_list(list_id)
+        if cards is None:
+            error_msg = f"⚠️ Unable to retrieve cards from the '{actual_list_name}' list. Please try again later."
+            if channel_id:
+                send_to_slack(error_msg, channel_id, format_error_message(error_msg))
+            return error_msg
+        
+        if len(cards) == 0:
+            empty_msg = f"📋 The list '{actual_list_name}' has no cards."
+            if channel_id:
+                # Para listas vacías también usamos los bloques, pero con mensaje especial
+                blocks = format_cards_list(actual_list_name, {})
+                send_to_slack(empty_msg, channel_id, blocks)
+            return empty_msg
+        
+        response = f"📋 **Cards in '{actual_list_name}':**\n\n"
+        for card_name in cards.keys():
+            response += f"• {card_name}\n"
+        
         if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
-    
-    if len(cards) == 0:
-        empty_msg = f"📋 The list '{list_name}' has no cards."
+            # Enviar respuesta con bloques formateados
+            blocks = format_cards_list(actual_list_name, cards)
+            send_to_slack(response, channel_id, blocks)
+        
+        return response
+    else:
+        # Si no se encuentra, sugerir listas similares
+        similar_lists = [name for name in lists.keys() 
+                         if list_name.lower() in name.lower() 
+                         or name.lower() in list_name.lower()]
+        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
+        error_msg = f"❌ List '{list_name}' not found on the board."
         if channel_id:
-            send_to_slack(empty_msg, channel_id)
-        return empty_msg
-    
-    response = f"📋 **Cards in '{list_name}':**\n\n"
-    for card_name in cards.keys():
-        response += f"• {card_name}\n"
-    
-    # Enviar resultado a Slack si se proporciona un channel_id
-    if channel_id:
-        send_to_slack(response, channel_id)
-    
-    return response
+            blocks = format_error_message(error_msg, similar_lists if similar_lists else None)
+            send_to_slack(error_msg + suggestion, channel_id, blocks)
+        return error_msg + suggestion
 
 def create_new_card(
         card_name: CardName,
@@ -414,7 +624,7 @@ def create_new_card(
     if not lists:
         error_msg = "⚠️ Unable to retrieve lists from the board. Please try again later."
         if channel_id:
-            send_to_slack(error_msg, channel_id)
+            send_to_slack(error_msg, channel_id, format_error_message(error_msg))
         return error_msg
     
     # Crear un mapa insensible a mayúsculas/minúsculas
@@ -428,25 +638,28 @@ def create_new_card(
         result = create_trello_card(list_id, card_name, description)
         
         if result:
-            success_msg = f"✅ Successfully created card '{card_name}' in list '{actual_list_name}'."
+            success_msg = f"Successfully created card '{card_name}' in list '{actual_list_name}'."
             if channel_id:
-                send_to_slack(success_msg, channel_id)
-            return success_msg
+                blocks = format_success_message(success_msg)
+                send_to_slack(f"✅ {success_msg}", channel_id, blocks)
+            return f"✅ {success_msg}"
         else:
-            error_msg = f"❌ Failed to create card '{card_name}'. Please try again later."
+            error_msg = f"Failed to create card '{card_name}'."
             if channel_id:
-                send_to_slack(error_msg, channel_id)
-            return error_msg
+                blocks = format_error_message(error_msg)
+                send_to_slack(f"❌ {error_msg} Please try again later.", channel_id, blocks)
+            return f"❌ {error_msg} Please try again later."
     else:
         # Si no se encuentra, sugerir listas similares
         similar_lists = [name for name in lists.keys() 
                          if list_name.lower() in name.lower() 
                          or name.lower() in list_name.lower()]
-        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
-        error_msg = f"❌ List '{list_name}' not found on the board.{suggestion}"
+        error_msg = f"List '{list_name}' not found on the board."
         if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
+            blocks = format_error_message(error_msg, similar_lists if similar_lists else None)
+            suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
+            send_to_slack(f"❌ {error_msg}{suggestion}", channel_id, blocks)
+        return f"❌ {error_msg}"
 
 def move_card_between_lists(
         card_name: str,
@@ -693,6 +906,7 @@ def generate_daily_stand_up(
         send_to_slack(summary, channel_id)
     
     return summary
+
 
 
 # Full set of tools - both low-level and high-level
