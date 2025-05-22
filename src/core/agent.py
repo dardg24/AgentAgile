@@ -1,4 +1,4 @@
-from typing import TypedDict, Annotated, Optional
+from typing import TypedDict, Annotated, Optional, Dict, Any
 from langgraph.graph.message import add_messages
 from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -6,19 +6,22 @@ from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 
-from config import (
+from utils.config import (
             GEMINI_API_KEY,
             LANGCHAIN_API_KEY,
             LANGCHAIN_TRACING,
             LANGSMITH_PROJECT
 )
-from tools import tools
+from core.tools import tools
+
 
 # Define state schema
 class TrelloSlackState(TypedDict):
     channel_id: str
     messages: Annotated[list[AnyMessage], add_messages]
-
+    thread_ts: Optional[str]
+    conversation_state: Optional[bool] = None
+    conversation_context: Optional[Dict[str, Any]]
 # Configure LLM
 llm = ChatGoogleGenerativeAI(
     model="models/gemini-2.0-flash",
@@ -67,11 +70,31 @@ def build_trello_slack_graph():
     builder = StateGraph(TrelloSlackState)
     
     # Define nodes
+    builder.add_node("check_continuation", conversation_continuation_node)  # NUEVO
     builder.add_node("assistant", assistant)
     builder.add_node("tools", ToolNode(tools))
     
+    # Define el flujo condicional desde START
+    def should_continue(state):
+        """Decide si es una continuación o una nueva conversación"""
+        if state.get("conversation_state"):
+            return "check_continuation"
+        return "assistant"
+    
     # Define edges
-    builder.add_edge(START, "assistant")
+    builder.add_conditional_edges(
+        START,
+        should_continue,
+        {
+            "check_continuation": "check_continuation",
+            "assistant": "assistant"
+        }
+    )
+    
+    # Desde check_continuation siempre va a assistant
+    builder.add_edge("check_continuation", "assistant")
+    
+    # El resto permanece igual
     builder.add_conditional_edges(
         "assistant",
         tools_condition
@@ -80,44 +103,88 @@ def build_trello_slack_graph():
     
     return builder.compile()
 
+# En agent.py - Agregar este nuevo nodo
+def conversation_continuation_node(state: TrelloSlackState):
+    """
+    Nodo que maneja continuaciones de conversaciones multi-paso.
+    """
+    conversation_state = state.get("conversation_state")
+    conversation_context = state.get("conversation_context", {})
+    
+    # Obtener el último mensaje del usuario
+    last_message = state["messages"][-1].content if state["messages"] else ""
+    
+    print(f"🔄 Procesando continuación: {conversation_state}")
+    print(f"📝 Contexto: {conversation_context}")
+    print(f"💬 Mensaje: {last_message}")
+    
+    if conversation_state == "awaiting_card_name":
+        # El usuario está respondiendo con el nombre de la tarjeta
+        card_name = last_message
+        list_name = conversation_context.get("list_name")
+        
+        # Crear mensaje para el LLM indicando que debe crear la tarjeta
+        system_prompt = f"""
+        The user has provided the card name: "{card_name}"
+        You need to create this card in the list: "{list_name}"
+        Use the create_new_card tool with these parameters.
+        """
+        
+        return {
+            "messages": [SystemMessage(content=system_prompt), HumanMessage(content=card_name)],
+            "conversation_state": None,  # Limpiar el estado de conversación
+            "conversation_context": {}   # Limpiar el contexto
+        }
+    
+    # Si no reconocemos el estado, pasar al assistant normal
+    return state
+
 # Main function to process Slack messages
-def process_slack_message(message: str, channel_id: str):
+def process_slack_message(
+    message: str, 
+    channel_id: str,
+    thread_ts: Optional[str] = None,
+    previous_state: Optional[Dict[str, Any]] = None
+):
     """
     Process a message from Slack through the Trello agent.
     
     Args:
         message: User's message from Slack
-        channel_id: Slack channel ID where message originated
-    
-    Returns:
-        The final result from the agent
+        channel_id: Slack channel ID
+        thread_ts: Thread timestamp for threaded conversations
+        previous_state: Estado de una conversación previa
     """
-    # Mensaje inicial que informa que la solicitud se está procesando
-    from tools import send_to_slack
-    send_to_slack(f"🔍 Procesando: '{message}'", channel_id)
+    # Si no hay estado previo, enviar mensaje de procesamiento
+    if not previous_state:
+        from core.tools import send_to_slack
+        send_to_slack(f"🔍 Procesando: '{message}'", channel_id)
     
     # Initialize graph
     graph = build_trello_slack_graph()
     
-    # Prepare initial state
-    messages = [HumanMessage(content=message)]
+    # Preparar estado inicial o continuar con el previo
+    if previous_state:
+        # Continuamos una conversación existente
+        new_messages = [HumanMessage(content=message)]
+        initial_state = {
+            **previous_state,
+            "messages": previous_state.get("messages", []) + new_messages
+        }
+    else:
+        # Nueva conversación
+        initial_state = {
+            "messages": [HumanMessage(content=message)],
+            "channel_id": channel_id,
+            "thread_ts": thread_ts,
+            "conversation_state": None,
+            "conversation_context": {}
+        }
     
-    # Invoke graph, incluyendo channel_id en el estado inicial
-    result = graph.invoke({
-        "messages": messages, 
-        "channel_id": channel_id  # Esto hace disponible el channel_id en el estado
-    })
+    # Invoke graph
+    result = graph.invoke(initial_state)
     
-    # For testing purposes, print the full conversation
-    for i, msg in enumerate(result["messages"]):
-        print(f"[{i}] {msg.type}: {msg.content}")
-    
-    # Send final response to Slack (if not already sent by tools)
-    final_message = result["messages"][-1].content
-    send_to_slack(f"🤖 {final_message}", channel_id)
-    
-    # Return the last message content
-    return final_message
+    return result  # Retornamos el estado completo, no solo el mensaje
 
 def test_agent():
     test_messages = [
@@ -135,7 +202,7 @@ def test_agent():
         print("="*50)
         
         # Usamos el canal de prueba definido en la configuración
-        from config import SLACK_CHANNEL_ID
+        from utils.config import SLACK_CHANNEL_ID
         response = process_slack_message(message, SLACK_CHANNEL_ID)
         
         print("\nFINAL RESPONSE:")

@@ -1,16 +1,19 @@
 import json
 import threading
 
+from typing import Dict, Any
 
-from agent import process_slack_message
-from funcs import is_valid_slack_request
+from core.agent import process_slack_message
+from utils.funcs import is_valid_slack_request
 from flask import Flask, request, jsonify
-from tools import (
+from core.tools import (
     send_to_slack, 
     get_trello_lists,
     move_card_between_lists
 )
-from config import BOARD_ID
+from utils.config import BOARD_ID
+
+conversation_states: Dict[str, Dict[str, Any]] = {}
 
 app = Flask(__name__)
 
@@ -30,6 +33,27 @@ def slack_events():
         
         # Solo procesar mensajes que no sean del propio bot
         if "bot_id" not in event:
+            thread_ts = event.get("thread_ts")
+            if thread_ts and thread_ts in conversation_states:
+                print(f"🔍 Respuesta detectada en hilo activo: {thread_ts}")
+                text = event["text"]
+                channel_id = event["channel"]
+                
+                # Recuperar el estado guardado
+                saved_state = conversation_states[thread_ts]
+                
+                # Procesar con el estado previo
+                threading.Thread(
+                    target=process_slack_message,
+                    args=(text, channel_id, thread_ts, saved_state)
+                ).start()
+                
+                # Limpiar el estado después de usarlo (opcional)
+                del conversation_states[thread_ts]
+                
+                return jsonify({"status": "ok"})
+            
+            # El resto del código existente continúa aquí...
             if event["type"] == "app_mention":
                 # Extraer el mensaje sin la mención del bot
                 text = event["text"].split(">", 1)[1].strip()
@@ -102,7 +126,22 @@ def slack_interactive():
                             "text": prompt
                         }
                     }]
-                    send_to_slack(prompt, channel_id, blocks=blocks, thread_ts=thread_ts)
+
+                    slack_response = send_to_slack(prompt, channel_id, blocks=blocks, thread_ts=thread_ts)
+
+                    message_ts = thread_ts if thread_ts else slack_response.get("ts", "")
+
+                    # Guardar el estado para esta conversación
+                    conversation_states[message_ts] = {
+                        "channel_id": channel_id,
+                        "conversation_state": "awaiting_card_name",
+                        "conversation_context": {
+                            "list_name": list_name,
+                            "action": "create_card"
+                        },
+                        "thread_ts": message_ts
+                    }
+                    print(f"💾 Estado guardado para thread {message_ts}: {conversation_states[message_ts]}")
                 
                 elif action_name == 'move_card':
                     source_list = button_data.get('source_list')

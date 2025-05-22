@@ -1,7 +1,7 @@
 import json
 import requests
 
-from config import (
+from utils.config import (
     TRELLO_API_KEY,
     TRELLO_TOKEN,
     BOARD_ID,
@@ -277,7 +277,7 @@ def send_to_slack(
         bool: True si el mensaje se envió correctamente, False en caso contrario
     """
     try:
-        from config import SLACK_BOT_TOKEN
+        from utils.config import SLACK_BOT_TOKEN
         
         url = "https://slack.com/api/chat.postMessage"
         headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}",
@@ -300,10 +300,10 @@ def send_to_slack(
         
         if slack_response.status_code == 200 and slack_response.json().get("ok"):
             print(f"Mensaje enviado exitosamente a Slack canal {channel_id}")
-            return True
+            return slack_response.json()  # ← IMPORTANTE: Retornar el JSON completo
         else:
             print(f"Error enviando mensaje a Slack: {slack_response.json()}")
-            return False
+            return {}  # Retornar dict vacío en caso de error
     
     except Exception as e:
         print(f"Excepción enviando mensaje a Slack: {str(e)}")
