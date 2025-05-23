@@ -9,7 +9,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from utils.config import (
             GEMINI_API_KEY,
             LANGCHAIN_API_KEY,
-            LANGCHAIN_TRACING,
+            LANGCHAIN_TRACING_V2,
             LANGSMITH_PROJECT
 )
 from core.tools import tools
@@ -103,7 +103,6 @@ def build_trello_slack_graph():
     
     return builder.compile()
 
-# En agent.py - Agregar este nuevo nodo
 def conversation_continuation_node(state: TrelloSlackState):
     """
     Nodo que maneja continuaciones de conversaciones multi-paso.
@@ -208,5 +207,6 @@ def test_agent():
         print("\nFINAL RESPONSE:")
         print(response)
         print("="*50)
+        
 if __name__ == "__main__":
     test_agent()
