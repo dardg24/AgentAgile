@@ -6,10 +6,10 @@ from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 
-from utils.config import (
+from utils import (
             GEMINI_API_KEY,
             LANGCHAIN_API_KEY,
-            LANGCHAIN_TRACING_V2,
+            LANGCHAIN_TRACING,
             LANGSMITH_PROJECT
 )
 from core.tools import tools

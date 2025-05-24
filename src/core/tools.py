@@ -1,7 +1,7 @@
 import json
 import requests
 
-from utils.config import (
+from utils import (
     TRELLO_API_KEY,
     TRELLO_TOKEN,
     BOARD_ID,
@@ -277,7 +277,7 @@ def send_to_slack(
         bool: True si el mensaje se envió correctamente, False en caso contrario
     """
     try:
-        from utils.config import SLACK_BOT_TOKEN
+        from utils import SLACK_BOT_TOKEN
         
         url = "https://slack.com/api/chat.postMessage"
         headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}",

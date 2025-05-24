@@ -15,7 +15,7 @@ SLACK_SIGNING_SECRET = os.getenv('SLACK_SIGNING_SECRET')
 
 # Langchain constants
 LANGCHAIN_API_KEY =  os.getenv('LANGCHAIN_API_KEY')
-LANGCHAIN_TRACING_V2 = os.getenv('LANGCHAIN_TRACING')
+LANGCHAIN_TRACING = os.getenv('LANGCHAIN_TRACING')
 LANGSMITH_PROJECT= os.getenv('LANGSMITH_PROJECT')
 
 # NewTypeHints for functions
@@ -29,3 +29,4 @@ ListName = NewType('ListName', str)
 PositionCard = NewType('PositionCard', float)
 DescriptionCard = NewType('DescriptionCard', str)
 ChannelId = NewType('ChannelId', str)
+
