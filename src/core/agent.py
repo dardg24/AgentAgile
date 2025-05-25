@@ -1,8 +1,8 @@
-from typing import TypedDict, Annotated, Optional, Dict, Any
+from typing import TypedDict, Annotated, Optional, Dict, Any, List
 from langgraph.graph.message import add_messages
-from langgraph.graph import START, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
-from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage
+from langgraph.graph import START, StateGraph, END
+from langgraph.prebuilt import ToolNode
+from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 
@@ -12,16 +12,19 @@ from utils import (
             LANGCHAIN_TRACING,
             LANGSMITH_PROJECT
 )
-from core.tools import tools
+from core import tools, SlackResponseCoordinator
 
 
-# Define state schema
+# State schema
 class TrelloSlackState(TypedDict):
     channel_id: str
     messages: Annotated[list[AnyMessage], add_messages]
     thread_ts: Optional[str]
-    conversation_state: Optional[bool] = None
+    conversation_state: Optional[str]
     conversation_context: Optional[Dict[str, Any]]
+    last_tool_results: Optional[List[Dict[str, Any]]]
+    response_sent: Optional[bool]
+
 # Configure LLM
 llm = ChatGoogleGenerativeAI(
     model="models/gemini-2.0-flash",
@@ -30,53 +33,123 @@ llm = ChatGoogleGenerativeAI(
 )
 llm_with_tools = llm.bind_tools(tools)
 
-# Assistant node handler
 def assistant(state: TrelloSlackState):
+    """Assistant that processes messages and decides on tool usage"""
     system_message = """You are a helpful Trello assistant integrated with Slack.
-You can manage Trello boards, lists, and cards using the available tools.
-You have access to a default Trello board that the user is working with.
+You manage Trello boards, lists, and cards using the available tools.
 
-IMPORTANT: Before selecting any tool, always think step-by-step about what the user is asking.
+IMPORTANT: 
+1. Tools return structured data, not send messages
+2. Be conversational and helpful
+3. For simple greetings or questions, respond naturally without tools
+4. For Trello operations, use the appropriate tool
 
-Follow this reasoning structure for each request:
-1. ANALYZE REQUEST: What is the user trying to accomplish? Identify the specific task and entities involved.
-2. IDENTIFY TOOL: Which tool is most appropriate for this task? Consider all available options.
-3. PLAN PARAMETERS: What parameters will you need? Consider potential issues like case sensitivity or ambiguity.
-4. EXPLAIN REASONING: Clearly articulate your reasoning process before executing any tool.
-
-For example:
-ANALYZE REQUEST: The user wants to create a new card named "Update docs" in the to-do list.
-IDENTIFY TOOL: I should use create_new_card for this task.
-PLAN PARAMETERS: I'll need the list_name="To Do" and card_name="Update docs".
-EXPLAIN REASONING: Creating a new card requires the create_new_card tool with the specific list and card name parameters.
-
-When the user asks for a "report", "activity report", "daily report", "stand-up report", or similar phrases,
-automatically use the generate_daily_stand_up tool with the default board.
-
-Remember that all high-level tools now can send messages directly to Slack, so users
-will receive real-time updates about the progress of their requests.
-
-Respond in a clear, professional manner after your reasoning process.
+Available tools:
+- list_boards: Shows all Trello boards
+- list_cards_in_list: Shows cards in a specific list
+- create_new_card: Creates a new card
+- move_card_between_lists: Moves cards between lists
+- update_card_details: Updates card information
+- generate_daily_stand_up: Creates a daily activity report
 """
-    sys_msg = SystemMessage(content=system_message)
     
+    sys_msg = SystemMessage(content=system_message)
     return {
-        "messages": [llm_with_tools.invoke([sys_msg] + state["messages"])],
-        "channel_id": state["channel_id"]
+        "messages": [llm_with_tools.invoke([sys_msg] + state["messages"])]
     }
+
+def extract_tool_results(state: TrelloSlackState) -> TrelloSlackState:
+    """Extract and structure tool results"""
+    tool_results = []
+    
+    for message in reversed(state["messages"][-5:]):
+        if isinstance(message, ToolMessage):
+            try:
+                # Tool results should already be dictionaries
+                result = message.content
+                if isinstance(result, dict):
+                    tool_results.append(result)
+            except Exception as e:
+                print(f"Error extracting tool result: {e}")
+    
+    return {"last_tool_results": tool_results}
+
+def send_response_node(state: TrelloSlackState) -> TrelloSlackState:
+    """Send formatted response to Slack using coordinator"""
+    if state.get("response_sent", False):
+        return {"response_sent": True}
+    
+    channel_id = state["channel_id"]
+    thread_ts = state.get("thread_ts")
+    
+    # Check for tool results first
+    tool_results = state.get("last_tool_results", [])
+    
+    if tool_results:
+        # Send each tool result through coordinator
+        for result in tool_results:
+            SlackResponseCoordinator.send_response(result, channel_id, thread_ts)
+    else:
+        # No tools used, send AI message directly
+        last_ai_message = None
+        for message in reversed(state["messages"]):
+            if isinstance(message, AIMessage):
+                last_ai_message = message
+                break
+        
+        if last_ai_message and last_ai_message.content:
+            from core import send_to_slack
+            send_to_slack(last_ai_message.content, channel_id, thread_ts=thread_ts)
+    
+    return {"response_sent": True}
+
+def conversation_continuation_node(state: TrelloSlackState):
+    """Handle multi-step conversations"""
+    conversation_state = state.get("conversation_state")
+    conversation_context = state.get("conversation_context", {})
+    last_message = state["messages"][-1].content if state["messages"] else ""
+    
+    if conversation_state == "awaiting_card_name":
+        card_name = last_message
+        list_name = conversation_context.get("list_name")
+        
+        system_prompt = f"""
+        The user provided the card name: "{card_name}"
+        Create this card in the list: "{list_name}"
+        Use the create_new_card tool.
+        """
+        
+        return {
+            "messages": [SystemMessage(content=system_prompt), HumanMessage(content=card_name)],
+            "conversation_state": None,
+            "conversation_context": {},
+            "response_sent": False
+        }
+    
+    return state
+
+def should_continue_after_assistant(state: TrelloSlackState) -> str:
+    """Routing after assistant"""
+    messages = state["messages"]
+    last_message = messages[-1] if messages else None
+    
+    if last_message and hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "tools"
+    return "send_response"
 
 # Build graph
 def build_trello_slack_graph():
     builder = StateGraph(TrelloSlackState)
     
-    # Define nodes
-    builder.add_node("check_continuation", conversation_continuation_node)  # NUEVO
+    # Add nodes
+    builder.add_node("check_continuation", conversation_continuation_node)
     builder.add_node("assistant", assistant)
     builder.add_node("tools", ToolNode(tools))
+    builder.add_node("extract_results", extract_tool_results)
+    builder.add_node("send_response", send_response_node)
     
-    # Define el flujo condicional desde START
-    def should_continue(state):
-        """Decide si es una continuación o una nueva conversación"""
+    # Initial routing
+    def should_continue_from_start(state):
         if state.get("conversation_state"):
             return "check_continuation"
         return "assistant"
@@ -84,129 +157,69 @@ def build_trello_slack_graph():
     # Define edges
     builder.add_conditional_edges(
         START,
-        should_continue,
+        should_continue_from_start,
         {
             "check_continuation": "check_continuation",
             "assistant": "assistant"
         }
     )
     
-    # Desde check_continuation siempre va a assistant
     builder.add_edge("check_continuation", "assistant")
     
-    # El resto permanece igual
     builder.add_conditional_edges(
         "assistant",
-        tools_condition
+        should_continue_after_assistant,
+        {
+            "tools": "tools",
+            "send_response": "send_response"
+        }
     )
-    builder.add_edge("tools", "assistant")
+    
+    builder.add_edge("tools", "extract_results")
+    builder.add_edge("extract_results", "assistant")
+    builder.add_edge("send_response", END)
     
     return builder.compile()
 
-def conversation_continuation_node(state: TrelloSlackState):
-    """
-    Nodo que maneja continuaciones de conversaciones multi-paso.
-    """
-    conversation_state = state.get("conversation_state")
-    conversation_context = state.get("conversation_context", {})
-    
-    # Obtener el último mensaje del usuario
-    last_message = state["messages"][-1].content if state["messages"] else ""
-    
-    print(f"🔄 Procesando continuación: {conversation_state}")
-    print(f"📝 Contexto: {conversation_context}")
-    print(f"💬 Mensaje: {last_message}")
-    
-    if conversation_state == "awaiting_card_name":
-        # El usuario está respondiendo con el nombre de la tarjeta
-        card_name = last_message
-        list_name = conversation_context.get("list_name")
-        
-        # Crear mensaje para el LLM indicando que debe crear la tarjeta
-        system_prompt = f"""
-        The user has provided the card name: "{card_name}"
-        You need to create this card in the list: "{list_name}"
-        Use the create_new_card tool with these parameters.
-        """
-        
-        return {
-            "messages": [SystemMessage(content=system_prompt), HumanMessage(content=card_name)],
-            "conversation_state": None,  # Limpiar el estado de conversación
-            "conversation_context": {}   # Limpiar el contexto
-        }
-    
-    # Si no reconocemos el estado, pasar al assistant normal
-    return state
-
-# Main function to process Slack messages
+# Process Slack messages
 def process_slack_message(
     message: str, 
     channel_id: str,
     thread_ts: Optional[str] = None,
     previous_state: Optional[Dict[str, Any]] = None
 ):
-    """
-    Process a message from Slack through the Trello agent.
-    
-    Args:
-        message: User's message from Slack
-        channel_id: Slack channel ID
-        thread_ts: Thread timestamp for threaded conversations
-        previous_state: Estado de una conversación previa
-    """
-    # Si no hay estado previo, enviar mensaje de procesamiento
+    """Process a message from Slack"""
+    # Send progress update for new conversations
     if not previous_state:
-        from core.tools import send_to_slack
-        send_to_slack(f"🔍 Procesando: '{message}'", channel_id)
+        SlackResponseCoordinator.send_progress_update(
+            f"Processing: '{message}'",
+            channel_id,
+            thread_ts
+        )
     
-    # Initialize graph
     graph = build_trello_slack_graph()
     
-    # Preparar estado inicial o continuar con el previo
     if previous_state:
-        # Continuamos una conversación existente
+        # Continue conversation
         new_messages = [HumanMessage(content=message)]
         initial_state = {
             **previous_state,
-            "messages": previous_state.get("messages", []) + new_messages
+            "messages": previous_state.get("messages", []) + new_messages,
+            "response_sent": False
         }
     else:
-        # Nueva conversación
+        # New conversation
         initial_state = {
             "messages": [HumanMessage(content=message)],
             "channel_id": channel_id,
             "thread_ts": thread_ts,
             "conversation_state": None,
-            "conversation_context": {}
+            "conversation_context": {},
+            "response_sent": False
         }
     
-    # Invoke graph
-    result = graph.invoke(initial_state)
+    # Invoke with recursion limit
+    config = {"recursion_limit": 25}
+    result = graph.invoke(initial_state, config=config)
     
-    return result  # Retornamos el estado completo, no solo el mensaje
-
-def test_agent():
-    test_messages = [
-        "Create a new card in Testing called testing new Jetson ",
-        # "Move the card 'Fix login bug' from 'In Progress' to 'Done'",
-        # "Create a new card called 'Update documentation' in the 'To Do' list",
-        # "Generate an activity report",
-        # "Genere a python function to replicate Fibonacci",
-        # "Say Hi to Jesus and tell him to move to the new trello board"  # Esta prueba debería funcionar ahora
-    ]
-    
-    for message in test_messages:
-        print("\n" + "="*50)
-        print(f"USER REQUEST: {message}")
-        print("="*50)
-        
-        # Usamos el canal de prueba definido en la configuración
-        from utils.config import SLACK_CHANNEL_ID
-        response = process_slack_message(message, SLACK_CHANNEL_ID)
-        
-        print("\nFINAL RESPONSE:")
-        print(response)
-        print("="*50)
-        
-if __name__ == "__main__":
-    test_agent()
+    return result

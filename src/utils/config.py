@@ -19,7 +19,7 @@ LANGCHAIN_TRACING = os.getenv('LANGCHAIN_TRACING')
 LANGSMITH_PROJECT= os.getenv('LANGSMITH_PROJECT')
 
 # NewTypeHints for functions
-from typing import NewType
+from typing import NewType, Dict, Any
 
 CardId = NewType('CardId', str)
 ListId = NewType('ListId', str)
@@ -29,4 +29,5 @@ ListName = NewType('ListName', str)
 PositionCard = NewType('PositionCard', float)
 DescriptionCard = NewType('DescriptionCard', str)
 ChannelId = NewType('ChannelId', str)
+Cards_dict = NewType('Cards_dict', Dict[str, Any])
 

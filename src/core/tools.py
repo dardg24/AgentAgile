@@ -8,6 +8,7 @@ from utils import (
     TRELLO_TOKEN,
     BOARD_ID,
     SLACK_CHANNEL_ID,
+    SLACK_BOT_TOKEN,
     BoardID,
     ListId,
     CardId,
@@ -98,7 +99,10 @@ def get_cards_in_list(list_id: ListId) -> Optional[Dict[str, str]]:
         print(f'Request failed (e.g., network issue): {e}')
         return None
 
-def create_trello_card(list_id: ListId, name:CardName, desc:DescriptionCard = '') -> Optional[Dict[str, str]]:
+def create_trello_card(
+        list_id: ListId,
+        name:CardName, desc:DescriptionCard = ''
+        ) -> Optional[Dict[str, str]]:
     """Creates a new card in the specified Trello list.
 
        This tool enables the agent to create new tasks when requested by users,
@@ -314,148 +318,129 @@ def move_card_between_lists(
         card_name: str,
         source_list_name: str,
         target_list_name: str,
-        board_id: Optional[str] = BOARD_ID,
-        channel_id: Optional[ChannelId] = SLACK_CHANNEL_ID) -> str:
-    """
-    Moves a card from one list to another using list names instead of IDs.
-    
-    This high-level tool simplifies card movement by using natural language references
-    to cards and lists, handling all the necessary lookups and API calls.
-    
-    Args:
-        card_name (str): The name of the card to move.
-        source_list_name (str): The name of the list where the card is currently.
-        target_list_name (str): The name of the list where the card should be moved.
-        board_id (str, optional): The ID of the board. If not provided, uses the default.
-    
-    Returns:
-        str: A success or error message describing the result of the operation.
-    """
+        board_id: Optional[str] = BOARD_ID) -> str:
+    """Moves a card between lists and returns structured data."""
     board_id = board_id or BOARD_ID
     
-    if channel_id:
-        send_to_slack(f"🔍 Moviendo tarjeta '{card_name}' de '{source_list_name}' a '{target_list_name}'...", channel_id)
-    
-    # Get lists on the board
     lists = get_trello_lists(board_id)
     if not lists:
-        error_msg = "⚠️ Unable to retrieve lists from the board. Please try again later."
-        if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
+        return {
+            "type": "card_moved",
+            "status": "error",
+            "message": "Unable to retrieve lists from the board."
+        }
     
-    # Crear un mapa insensible a mayúsculas/minúsculas
-    lists_case_insensitive = {name.lower(): (name, id) for name, id in lists.items()}
+    lists_lower = {name.lower(): (name, id) for name, id in lists.items()}
     
-    # Verificar la lista de origen (insensible a mayúsculas/minúsculas)
-    if source_list_name.lower() not in lists_case_insensitive:
-        similar_lists = [name for name in lists.keys() 
-                         if source_list_name.lower() in name.lower()]
-        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
-        error_msg = f"❌ Source list '{source_list_name}' not found on the board.{suggestion}"
-        if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
+    # Verify source list
+    if source_list_name.lower() not in lists_lower:
+        suggestions = [name for name in lists.keys() if source_list_name.lower() in name.lower()]
+        return {
+            "type": "card_moved",
+            "status": "error",
+            "message": f"Source list '{source_list_name}' not found.",
+            "suggestions": suggestions
+        }
     
-    # Verificar la lista de destino (insensible a mayúsculas/minúsculas)
-    if target_list_name.lower() not in lists_case_insensitive:
-        similar_lists = [name for name in lists.keys() 
-                         if target_list_name.lower() in name.lower()]
-        suggestion = f"\n\nDid you mean one of these lists? {', '.join(similar_lists)}" if similar_lists else ""
-        error_msg = f"❌ Target list '{target_list_name}' not found on the board.{suggestion}"
-        if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
+    # Verify target list
+    if target_list_name.lower() not in lists_lower:
+        suggestions = [name for name in lists.keys() if target_list_name.lower() in name.lower()]
+        return {
+            "type": "card_moved",
+            "status": "error",
+            "message": f"Target list '{target_list_name}' not found.",
+            "suggestions": suggestions
+        }
     
-    # Obtener los nombres e IDs originales
-    source_list_actual_name, source_list_id = lists_case_insensitive[source_list_name.lower()]
-    target_list_actual_name, target_list_id = lists_case_insensitive[target_list_name.lower()]
+    source_list_actual, source_list_id = lists_lower[source_list_name.lower()]
+    target_list_actual, target_list_id = lists_lower[target_list_name.lower()]
     
-    # Get cards in the source list
+    # Get cards in source list
     cards = get_cards_in_list(source_list_id)
     if cards is None:
-        error_msg = f"⚠️ Unable to retrieve cards from '{source_list_actual_name}'. Please try again later."
-        if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
+        return {
+            "type": "card_moved",
+            "status": "error",
+            "message": f"Unable to retrieve cards from '{source_list_actual}'."
+        }
     
-    # También podemos hacer una búsqueda insensible a mayúsculas/minúsculas para las tarjetas
-    cards_case_insensitive = {name.lower(): (name, id) for name, id in cards.items()}
+    # Case-insensitive card search
+    cards_lower = {name.lower(): (name, id) for name, id in cards.items()}
     
-    # Verificar si la tarjeta existe (insensible a mayúsculas/minúsculas)
-    if card_name.lower() in cards_case_insensitive:
-        card_actual_name, card_id = cards_case_insensitive[card_name.lower()]
-        
-        # Move the card
+    if card_name.lower() in cards_lower:
+        card_actual_name, card_id = cards_lower[card_name.lower()]
         result = update_trello_card(card_id, target_list_id)
         
         if result:
-            success_msg = f"✅ Successfully moved card '{card_actual_name}' from '{source_list_actual_name}' to '{target_list_actual_name}'."
-            if channel_id:
-                send_to_slack(success_msg, channel_id)
-            return success_msg
+            return {
+                "type": "card_moved",
+                "status": "success",
+                "card_name": card_actual_name,
+                "source_list": source_list_actual,
+                "target_list": target_list_actual,
+                "card_data": result
+            }
         else:
-            error_msg = f"❌ Failed to move card '{card_actual_name}'. Please try again later."
-            if channel_id:
-                send_to_slack(error_msg, channel_id)
-            return error_msg
+            return {
+                "type": "card_moved",
+                "status": "error",
+                "message": f"Failed to move card '{card_actual_name}'."
+            }
     else:
-        # Si no se encuentra la tarjeta, sugerir tarjetas similares
-        similar_cards = [name for name in cards.keys() 
-                         if card_name.lower() in name.lower() 
-                         or name.lower() in card_name.lower()]
-        suggestion = f"\n\nDid you mean one of these cards? {', '.join(similar_cards)}" if similar_cards else ""
-        error_msg = f"❌ Card '{card_name}' not found in list '{source_list_actual_name}'.{suggestion}"
-        if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
+        suggestions = [name for name in cards.keys() if card_name.lower() in name.lower()]
+        return {
+            "type": "card_moved",
+            "status": "error",
+            "message": f"Card '{card_name}' not found in '{source_list_actual}'.",
+            "suggestions": suggestions
+        }
 
 def update_card_details(
         card_name: str,
         list_name: str,
         new_name: Optional[str] = None,
         new_description: Optional[str] = None,
-        board_id: Optional[str] = None) -> str:
-    """
-    Updates the details of an existing card using list and card names.
-    
-    This high-level tool allows for updating card details using natural language
-    references rather than technical IDs.
-    
-    Args:
-        card_name (str): The current name of the card to update.
-        list_name (str): The name of the list containing the card.
-        new_name (str, optional): The new name for the card.
-        new_description (str, optional): The new description for the card.
-        board_id (str, optional): The ID of the board. If not provided, uses the default.
-    
-    Returns:
-        str: A success or error message describing the result of the operation.
-    """
+        board_id: Optional[str] = None) -> Dict[str, Any]:
+    """Updates card details and returns structured data."""
     if not new_name and not new_description:
-        return "⚠️ No updates specified. Please provide a new name or description."
+        return {
+            "type": "card_updated",
+            "status": "error",
+            "message": "No updates specified."
+        }
     
     board_id = board_id or BOARD_ID
     
-    # Get lists on the board
     lists = get_trello_lists(board_id)
     if not lists:
-        return "⚠️ Unable to retrieve lists from the board. Please try again later."
+        return {
+            "type": "card_updated",
+            "status": "error",
+            "message": "Unable to retrieve lists from the board."
+        }
     
-    # Check if the list exists
     if list_name not in lists:
-        return f"❌ List '{list_name}' not found on the board."
+        return {
+            "type": "card_updated",
+            "status": "error",
+            "message": f"List '{list_name}' not found."
+        }
     
-    # Get cards in the list
     cards = get_cards_in_list(lists[list_name])
     if cards is None:
-        return f"⚠️ Unable to retrieve cards from '{list_name}'. Please try again later."
+        return {
+            "type": "card_updated",
+            "status": "error",
+            "message": f"Unable to retrieve cards from '{list_name}'."
+        }
     
-    # Check if the card exists
     if card_name not in cards:
-        return f"❌ Card '{card_name}' not found in list '{list_name}'."
+        return {
+            "type": "card_updated",
+            "status": "error",
+            "message": f"Card '{card_name}' not found in '{list_name}'."
+        }
     
-    # Update the card
     result = update_trello_card(cards[card_name], name=new_name, desc=new_description)
     
     if result:
@@ -465,38 +450,31 @@ def update_card_details(
         if new_description:
             updates.append("description")
         
-        return f"✅ Successfully updated {' and '.join(updates)} of card '{card_name}'."
+        return {
+            "type": "card_updated",
+            "status": "success",
+            "card_name": card_name,
+            "updates": updates,
+            "card_data": result
+        }
     else:
-        return f"❌ Failed to update card '{card_name}'. Please try again later."
+        return {
+            "type": "card_updated",
+            "status": "error",
+            "message": f"Failed to update card '{card_name}'."
+        }
 
-def generate_daily_stand_up(
-        board_id: Optional[BoardID] = BOARD_ID,
-        channel_id: Optional[ChannelId] = SLACK_CHANNEL_ID) -> str:
-    """
-    Generates a detailed stand-up report of today's Trello activity.
-    
-    This targeted report focuses specifically on cards updated today,
-    making it perfect for daily stand-up meetings and progress updates.
-    
-    Args:
-        board_id (str, optional): The ID of the board. If not provided, uses the default.
-        channel_id (str, optional): Slack channel ID for notifications.
-    
-    Returns:
-        str: A formatted stand-up report showing today's activity.
-    """
-    if channel_id:
-        send_to_slack("🔍 Generando reporte de actividad diaria...", channel_id)
-    
+def generate_daily_stand_up(board_id: Optional[BoardID] = None) -> Dict[str, Any]:
+    """Generates a daily stand-up report and returns structured data."""
     board_id = board_id or BOARD_ID
     
-    # Get lists on the board
     lists = get_trello_lists(board_id)
     if not lists:
-        error_msg = "⚠️ Unable to retrieve lists from the board. Please try again later."
-        if channel_id:
-            send_to_slack(error_msg, channel_id)
-        return error_msg
+        return {
+            "type": "daily_summary",
+            "status": "error",
+            "message": "Unable to retrieve lists from the board."
+        }
     
     # Collect all cards with details
     all_cards = []
@@ -518,98 +496,84 @@ def generate_daily_stand_up(
     # Filter cards updated today
     today_cards = []
     for card in all_cards:
-        # Safely parse the date with proper timezone handling
         try:
             last_activity = datetime.fromisoformat(card['dateLastActivity'].replace('Z', '+00:00'))
-            # Compare only the date portions
             if last_activity.date() == today:
                 today_cards.append(card)
         except (ValueError, TypeError):
-            # Skip cards with unparseable dates
             continue
     
     if not today_cards:
-        no_cards_msg = "No cards were updated today.\n"
-        summary += no_cards_msg
-        if channel_id:
-            send_to_slack(summary, channel_id)
-        return summary
+        summary += "No cards were updated today.\n"
+        return {
+            "type": "daily_summary",
+            "status": "success",
+            "summary": summary,
+            "cards_count": 0
+        }
     
     summary += f"## Cards Updated Today ({len(today_cards)})\n\n"
     
     for card in today_cards:
-        # Extract relevant information
         name = card['name']
         description = card['desc'] if card['desc'] else "No description"
         status = "Open" if not card['closed'] else "Closed"
         url = card['url']
         
-        # Add to summary
         summary += f"### {name}\n"
         summary += f"- **Status:** {status}\n"
         summary += f"- **Description:** {description}\n"
         summary += f"- **Last Updated:** {card['dateLastActivity']}\n"
         summary += f"- **URL:** {url}\n\n"
     
-    if channel_id:
-        send_to_slack(summary, channel_id)
-    
-    return summary
+    return {
+        "type": "daily_summary",
+        "status": "success",
+        "summary": summary,
+        "cards_count": len(today_cards),
+        "cards": today_cards
+    }
+
+# --- Slack Comunication Function ---
 
 def send_to_slack(
-        message: str, 
-        channel_id: ChannelId, 
-        blocks: Optional[List[Dict]] = None,
-        thread_ts: Optional[str] = None
-    ) -> bool:
-    """
-    Envía un mensaje a un canal específico de Slack.
+    message: str, 
+    channel_id: ChannelId, 
+    blocks: Optional[List[Dict]] = None,
+    thread_ts: Optional[str] = None
+) -> Dict[str, Any]:
+    """Direct function to send messages to Slack. Used only by the coordinator."""
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
     
-    Args:
-        message (str): El mensaje a enviar (fallback text)
-        channel_id (str): ID del canal de Slack
-        blocks (List[Dict], opcional): Bloques formateados para el mensaje
-        thread_ts (str, opcional): ID de un hilo para responder en esa conversación
-        
-    Returns:
-        bool: True si el mensaje se envió correctamente, False en caso contrario
-    """
+    payload = {
+        "channel": channel_id,
+        "text": message
+    }
+    
+    if blocks:
+        payload["blocks"] = blocks
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    
     try:
-        from utils import SLACK_BOT_TOKEN
+        response = requests.post(url, headers=headers, json=payload)
+        response_data = response.json()
         
-        url = "https://slack.com/api/chat.postMessage"
-        headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}",
-                  "Content-Type": "application/json"}
-        
-        payload = {
-            "channel": channel_id,
-            "text": message  # Texto de respaldo si los bloques no se pueden renderizar
-        }
-        
-        # Añadir bloques si están presentes
-        if blocks:
-            payload["blocks"] = blocks
-            
-        # Añadir thread_ts si está presente para responder en un hilo
-        if thread_ts:
-            payload["thread_ts"] = thread_ts
-        
-        slack_response = requests.post(url, headers=headers, json=payload)
-        
-        if slack_response.status_code == 200 and slack_response.json().get("ok"):
-            print(f"Mensaje enviado exitosamente a Slack canal {channel_id}")
-            return slack_response.json()  # ← IMPORTANTE: Retornar el JSON completo
+        if response.status_code == 200 and response_data.get("ok"):
+            return response_data
         else:
-            print(f"Error enviando mensaje a Slack: {slack_response.json()}")
-            return {}  # Retornar dict vacío en caso de error
-    
+            print(f"Error sending to Slack: {response_data}")
+            return {"ok": False, "error": response_data.get("error", "Unknown error")}
     except Exception as e:
-        print(f"Excepción enviando mensaje a Slack: {str(e)}")
-        return False
+        print(f"Exception sending to Slack: {str(e)}")
+        return {"ok": False, "error": str(e)}
 
 
-
-# Full set of tools - both low-level and high-level
+# Export tools list for the agent
 tools = [
     # Low-level API tools
     get_trello_boards,
@@ -619,13 +583,11 @@ tools = [
     update_trello_card,
     get_trello_card,
     
-    # High-level tools optimized for agent use
+    # High-level tools that return structured data
     list_boards,
     list_cards_in_list,
     create_new_card,
     move_card_between_lists,
     update_card_details,
-    generate_daily_stand_up,
-
-    send_to_slack
+    generate_daily_stand_up
 ]

@@ -10,9 +10,6 @@ from .config import (
     LANGCHAIN_API_KEY,
     LANGCHAIN_TRACING,
     LANGSMITH_PROJECT,
-)
-
-from .config import (
     CardId,
     ListId,
     BoardID,
@@ -21,5 +18,6 @@ from .config import (
     PositionCard,
     DescriptionCard,
     ChannelId,
-    Cards_dict
-)
+    CardsDict)
+
+from .funcs import is_valid_slack_request
