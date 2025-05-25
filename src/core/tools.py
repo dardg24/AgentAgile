@@ -250,16 +250,19 @@ def list_cards_in_list(
         cards = get_cards_in_list(list_id)
 
         if cards is None:
-            return{
-                "type": "cards_list",
-                "status": "error",
-                "message": f"Unable to retrieve cards from '{actual_list_name}'."
-            }
-        return {
+            return {
             "type": "cards_list",
             "status": "error",
-            "message": f"Unable to retrieve cards from '{actual_list_name}'"
+            "message": f"Unable to retrieve cards from '{actual_list_name}'."
+            }
+        
+        return {
+            "type": "cards_list",
+            "status": "success",
+            "list_name": actual_list_name,
+            "cards": cards
         }
+        
     else:
         suggestions = [name for name in lists.keys() if list_name.lower() in name.lower()]
         return {
@@ -306,7 +309,7 @@ def create_new_card(
                 "message": f"Failed to create card '{card_name}'."
             }
     else:
-        suggestions = [name for name in lists.keys() if list_name.lower()]
+        suggestions = [name for name in lists.keys() if list_name.lower() in name.lower()]
         return {
             "type": "card_created",
             "status": "error",
@@ -318,7 +321,7 @@ def move_card_between_lists(
         card_name: str,
         source_list_name: str,
         target_list_name: str,
-        board_id: Optional[str] = BOARD_ID) -> str:
+        board_id: Optional[str] = BOARD_ID) -> Dict[str, Any]:
     """Moves a card between lists and returns structured data."""
     board_id = board_id or BOARD_ID
     

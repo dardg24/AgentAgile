@@ -277,7 +277,7 @@ class SlackResponseCoordinator:
             which typically includes information about the message posting status.
         """
 
-        from tools import send_to_slack
+        from core.tools import send_to_slack
 
         final_channel_id: ChannelId = channel_id or SLACK_CHANNEL_ID # Ensure type consistency
 
@@ -403,7 +403,7 @@ class SlackResponseCoordinator:
         """
         # Import here to avoid circular imports
 
-        from tools import send_to_slack 
+        from core.tools import send_to_slack 
 
         final_channel_id: ChannelId = channel_id or SLACK_CHANNEL_ID # Ensure type consistency
 

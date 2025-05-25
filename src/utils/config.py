@@ -29,5 +29,5 @@ ListName = NewType('ListName', str)
 PositionCard = NewType('PositionCard', float)
 DescriptionCard = NewType('DescriptionCard', str)
 ChannelId = NewType('ChannelId', str)
-Cards_dict = NewType('Cards_dict', Dict[str, Any])
+CardsDict = NewType('CardsDict', Dict[str, Any])
 
