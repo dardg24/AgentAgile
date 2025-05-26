@@ -1,4 +1,4 @@
-from .config import (
+from .constants import (
     TRELLO_API_KEY,
     TRELLO_TOKEN,
     SLACK_BOT_TOKEN,
@@ -10,6 +10,9 @@ from .config import (
     LANGCHAIN_API_KEY,
     LANGCHAIN_TRACING,
     LANGSMITH_PROJECT,
+    )
+
+from .typehints import (
     CardId,
     ListId,
     BoardID,
@@ -18,6 +21,7 @@ from .config import (
     PositionCard,
     DescriptionCard,
     ChannelId,
-    CardsDict)
+    CardsDict
+)
 
 from .funcs import is_valid_slack_request

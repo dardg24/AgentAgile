@@ -3,12 +3,14 @@ import requests
 from typing import Dict, Optional, Any, List
 from datetime import datetime
 
-from utils import (
+from utils.constants import (
     TRELLO_API_KEY,
     TRELLO_TOKEN,
     BOARD_ID,
     SLACK_CHANNEL_ID,
     SLACK_BOT_TOKEN,
+)
+from utils.typehints import (
     BoardID,
     ListId,
     CardId,

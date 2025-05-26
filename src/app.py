@@ -48,16 +48,6 @@ def slack_events():
     # Slack requiere una respuesta rápida
     return jsonify({"status": "ok"})
 
-@app.route('/slack/interactive', methods=['POST'])
-def slack_interactive():
-    """Maneja las interacciones con botones y otros elementos interactivos."""
-    if not is_valid_slack_request():
-        return jsonify({'error': 'invalid_request'}), 403
-    
-    # Por ahora, simplemente responder OK a cualquier interacción
-    # En futuras versiones, aquí se puede delegar al agente
-    return "", 200
-
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "ok"})
